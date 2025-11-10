@@ -42,11 +42,12 @@ MANIFEST
 # Installer logs
 cpu_run.log
 cpu_run.err
-cuda12.4.log
-cuda12.4.err
+cuda12.6.log
+cuda12.6.err
 
 # Unit test / coverage reports
 .cache
+tmp
 
 # Environments
 .env
@@ -60,7 +61,17 @@ venv.bak/
 # mkdocs documentation
 /site
 
-#other scripts
+# other scripts
 create.sh
 run_gpu.sh
 run_cpu.sh
+
+# other
+*.csv
+source_data
+clean_data
+RuDevices.tar
+audio_cache
+main.py
+*data_process.py
+*to_parquet.ipynb
