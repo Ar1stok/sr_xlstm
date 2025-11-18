@@ -73,5 +73,3 @@ clean_data
 RuDevices.tar
 audio_cache
 main.py
-*data_process.py
-*to_parquet.ipynb

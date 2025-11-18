@@ -1,8 +1,10 @@
+import glob
 import os
 import logging
 
 from typing import Any, Dict, List, Optional, Union
 from datasets import DatasetDict, Dataset, Features, Value, Audio
+from datasets import load_dataset
 from pathlib import Path
 
 
@@ -338,3 +340,35 @@ def to_dataset(
         logger.info(f"Dataset saved to {save_path}")
     
     return dataset
+
+
+def load_from_parquet(path: str) -> DatasetDict | Dataset:
+    """
+    Load parquet dataset splits from given directory.
+
+    Checks for 'train', 'valid', and 'test' parquet files inside `path` and loads
+    available from each. Returns a DatasetDict if multiple splits exist, else a single Dataset.
+
+    Parameters
+    ----------
+    path : str
+        Root directory containing 'train', and/or 'valid', and/or 'test' parquet files.
+
+    Returns
+    -------
+    DatasetDict or Dataset
+        Loaded dataset object. DatasetDict if multiple splits are present; otherwise a single Dataset.
+    """
+    splits = ['train', 'valid', 'test']
+    data_files = {split: glob.glob(os.path.join(path, f'{split}.parquet')) for split in splits}
+    data_files = {k: v for k, v in data_files.items() if v}
+
+    if not data_files:
+        raise ValueError("No parquet files found in 'train', 'valid', or 'test' subdirectories")
+
+    dataset = load_dataset('parquet', data_files=data_files)
+
+    if len(data_files) > 1:
+        return dataset
+    else:
+        return next(iter(dataset.values()))
