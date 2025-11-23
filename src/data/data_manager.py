@@ -1,12 +1,11 @@
+"""Dataset Manager: file loading, processing, and dataset creation."""
 import glob
-import os
 import logging
-
-from typing import Any, Dict, List, Optional, Union
-from datasets import DatasetDict, Dataset, Features, Value, Audio
-from datasets import load_dataset
+import os
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
+from datasets import Audio, Dataset, DatasetDict, Features, Value, load_dataset
 
 # Configure logging
 logging.basicConfig(
@@ -18,22 +17,23 @@ logger = logging.getLogger(__name__)
 
 def load_files(root: str) -> List[Dict[str, str]]:
     """
-    Loads audio file paths and their corresponding transcriptions from a nested directory structure.
+    Loads audio file paths and their corresponding transcriptions 
+    from a nested directory structure.
 
     Parameters
     ----------
     root : str
-        Root directory path containing subdirectories with audio (.wav) and transcription (.txt) files.
+        Root directory path containing subdirectories 
+        with audio (.wav) and transcription (.txt) files.
 
     Returns
     -------
     List[Dict[str, str]]
-        A list of dictionaries, each with keys 'audio' (file path) and 'transcription' (text).
+        A list of dictionaries, each with keys 'audio' (file path) 
+        and 'transcription' (text).
     """
-
     data = []
     root_path = Path(root)
-    
     for path_fst in root_path.iterdir():
         if not path_fst.is_dir():
             continue
@@ -42,17 +42,13 @@ def load_files(root: str) -> List[Dict[str, str]]:
                 continue
             for file_path in path_snd.glob('*.wav'):
                 txt_path = file_path.with_suffix('.txt')
-                
                 if not txt_path.exists():
                     continue
-                
                 transcription = txt_path.read_text(encoding='utf8').strip()
-                
                 data.append({
                         'audio': str(file_path),
                         'transcription': transcription
                     })
-                
     return data
 
 
@@ -60,9 +56,10 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
     """
     Split a HuggingFace Dataset into train, test, and/or validation sets.
 
-    Divides a single Dataset into multiple splits based on provided configuration.
-    Supports stratified splitting, custom seed for reproducibility, and flexible
-    split ratios (2-way or 3-way split).
+    Divides a single Dataset into multiple splits 
+    based on provided configuration.
+    Supports stratified splitting, custom seed for reproducibility, 
+    and flexible split ratios (2-way or 3-way split).
 
     Parameters
     ----------
@@ -75,7 +72,7 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
             Proportion (0-1) or absolute number of samples for the training set.
             Required.
         - ``'valid_size'`` : float or int, optional
-            Proportion (0-1) or absolute number of samples for the validation set.
+            Proportion (0-1) or absolute number of samples for the valid set.
             If None, only train/test split is performed. Default is None.
         - ``'test_size'`` : float or int, optional
             Proportion (0-1) or absolute number of samples for the test set.
@@ -89,8 +86,11 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
     DatasetDict
         Dictionary containing split datasets. Keys depend on configuration:
 
-        - If ``'valid_size'`` is provided: ``{'train': Dataset, 'valid': Dataset, 'test': Dataset}``
-        - If ``'valid_size'`` is None: ``{'train': Dataset, 'test': Dataset}``
+        - If ``'valid_size'`` is provided: 
+        ``{'train': Dataset, 'valid': Dataset, 'test': Dataset}``
+        
+        - If ``'valid_size'`` is None: 
+        ``{'train': Dataset, 'test': Dataset}``
 
     Raises
     ------
@@ -106,7 +106,12 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
 
     >>> from datasets import Dataset
     >>> dataset = Dataset.from_dict({'text': ['a', 'b', 'c', 'd', 'e']})
-    >>> config = {'train_size': 0.6, 'valid_size': 0.2, 'test_size': 0.2, 'seed': 42}
+    >>> config = {
+    >>>           'train_size': 0.6, 
+    >>>           'valid_size': 0.2, 
+    >>>           'test_size': 0.2, 
+    >>>           'seed': 42
+    >>>           }
     >>> splits = split_data(dataset, config)
     >>> len(splits['train']), len(splits['valid']), len(splits['test'])
     (3, 1, 1)
@@ -138,10 +143,12 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
                 test_size = 1.0 - train_size - valid_size
                 if test_size < 0:
                     logger.error(
-                        f"train_size ({train_size}) + valid_size ({valid_size}) > 1.0"
+                        'train_size (%f) + valid_size (%f) > 1.0',
+                        train_size, valid_size
                     )
                     raise ValueError(
-                        "train_size + valid_size cannot exceed 1.0 for proportions."
+                        'train_size + valid_size ' \
+                        'cannot exceed 1.0 for proportions.'
                     )
             else:
                 # Absolute numbers case
@@ -149,25 +156,28 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
                 test_size = total_samples - train_size - valid_size
                 if test_size < 0:
                     logger.error(
-                        f"train_size ({train_size}) + valid_size ({valid_size}) > "
-                        f"total_samples ({total_samples})"
+                        'train_size (%f) + valid_size (%f)'
+                        ' > total_samples (%d)',
+                        train_size, valid_size, total_samples
                     )
                     raise ValueError(
-                        "train_size + valid_size cannot exceed total samples."
+                        'train_size + valid_size cannot exceed total samples.'
                     )
 
         logger.info(
-            f"Splitting into 3 sets: train_size={train_size}, "
-            f"valid_size={valid_size}, test_size={test_size}"
+            'Splitting into 3 sets: ' \
+            'train_size= %f, valid_size=%f, test_size=%f',
+            train_size, valid_size, test_size
         )
 
         # First split: separate train from (valid + test)
         train_test_split = dataset.train_test_split(
             train_size=train_size,
-            test_size=1.0 - train_size if isinstance(train_size, float) else None,
+            test_size=(
+                1.0 - train_size if isinstance(train_size, float) else None
+            ),
             seed=seed,
         )
-        
         # Calculate proportion for the second split
         if isinstance(valid_size, float):
             valid_test_ratio = valid_size / (valid_size + test_size)
@@ -186,16 +196,22 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
         })
 
         logger.info(
-            f"Dataset split successfully: train={len(new_dataset['train'])}, "
-            f"valid={len(new_dataset['valid'])}, test={len(new_dataset['test'])}"
+            'Dataset split successfully: train=%f, valid=%f, test=%f',
+            len(new_dataset['train']), len(new_dataset['valid']),
+            len(new_dataset['test'])
         )
 
     # Split: train/test
     else:
         if test_size is None:
-            test_size = 1.0 - train_size if isinstance(train_size, float) else None
+            test_size = (
+                1.0 - train_size if isinstance(train_size, float) else None
+            )
 
-        logger.info(f"Splitting into 2 sets: train_size={train_size}, test_size={test_size}")
+        logger.info(
+            'Splitting into 2 sets: train_size=%f, test_size=%f',
+            train_size, test_size
+        )
 
         new_dataset = dataset.train_test_split(
             train_size=train_size,
@@ -204,29 +220,38 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
         )
 
         logger.info(
-            f"Dataset split successfully: train={len(new_dataset['train'])}, "
-            f"test={len(new_dataset['test'])}"
+            'Dataset split successfully: train=%f, test=%f',
+            len(new_dataset['train']), len(new_dataset['test'])
         )
 
     return new_dataset
 
 
-def save_to_parquet(dataset: Optional[DatasetDict | Dataset], save_path: str) -> None:
+def save_to_parquet(
+        dataset: Optional[DatasetDict | Dataset],
+        save_path: str
+        ) -> None:
     """Save Dataset in .parquet format"""
     os.makedirs('clean_data', exist_ok=True)
 
     if isinstance(dataset, DatasetDict):
-        splits = ['train', 'valid', 'test'] if 'valid' in dataset else ['train', 'test']
+        splits = (
+            ['train', 'valid', 'test']
+            if 'valid' in dataset
+            else ['train', 'test']
+        )
         for split in splits:
-            dataset[split].to_parquet(path_or_buf=f'{save_path}/{split}.parquet')
-            logger.info(f'{split} part of dataset was saved to clean_data')
+            dataset[split].to_parquet(
+                path_or_buf=f'{save_path}/{split}.parquet'
+            )
+            logger.info('%d part of dataset was saved to clean_data', split)
     else:
         dataset.to_parquet(path_or_buf=f'{save_path}/dataset.parquet')
         logger.info('Dataset was saved to clean_data')
 
 
 def to_dataset(
-        data=None, 
+        data=None,
         root_path=None,
         split_config=None,
         save_path=None,
@@ -264,7 +289,12 @@ def to_dataset(
         - ``'seed'`` : int, optional
             Random seed for reproducibility.
             
-        Example: ``{'train_size': 0.8, 'valid_size': 0.1, 'test_size': 0.1, 'seed': 42}``
+        Example: ``{
+                    'train_size': 0.8, 
+                    'valid_size': 0.1, 
+                    'test_size': 0.1, 
+                    'seed': 42
+                    }``
         Default is None.
     save_path : str, optional
         Path where the dataset should be saved in .parquet format. 
@@ -284,11 +314,14 @@ def to_dataset(
     Create a dataset from a list of dictionaries:
     
     >>> data = [
-    ...     {'audio': '/path/to/audio1.wav', 'transcription': 'Example of transcription one'},
-    ...     {'audio': '/path/to/audio2.wav', 'transcription': 'Example of transcription two'}
+    ...     {'audio': '/path/to/audio1.wav', 
+    ...      'transcription': 'Example of transcription one'},
+    ...     {'audio': '/path/to/audio2.wav', 
+    ...      'transcription': 'Example of transcription two'}
     ... ]
     >>> dataset = to_dataset(data=data)
-    {'audio': Audio(sampling_rate=16000, decode=True, num_channels=None, stream_index=None), 'transcription': Value('string')}
+    {'audio': Audio(sampling_rate=16000, decode=True),
+    'transcription': Value('string')}
     
     Load data from directory and split into train/valid/test:
     
@@ -303,16 +336,16 @@ def to_dataset(
     """
     # Validate input parameters
     if data is None and root_path is None:
-        logger.error("Both data and root_path are None.")
+        logger.error('Both data and root_path are None.')
         raise ValueError("Either 'data' or 'root_path' must be provided.")
 
     # Load data from root_path if provided
     if root_path:
         try:
             data = load_files(root_path)
-            logger.info(f"Loaded {len(data)} items from {root_path}")
+            logger.info('Loaded %d items from %s', len(data), root_path)
         except Exception as e:
-            logger.error(f"Failed to load data from {root_path}: {e}")
+            logger.error('Failed to load data from %s: %s', root_path, e)
             raise
 
     # Define dataset features
@@ -324,21 +357,19 @@ def to_dataset(
     # Create HuggingFace Dataset
     try:
         dataset = Dataset.from_list(data, features=features)
-        logger.info(f"Created Dataset with {len(dataset)} entries.")
+        logger.info('Created Dataset with %d entries.', len(dataset))
     except Exception as e:
-        logger.error(f"Failed to create Dataset from data: {e}")
+        logger.error('Failed to create Dataset from data: %s', e)
         raise
 
     # Split dataset if configuration provided
     if split_config is not None:
         dataset = split_data(dataset, split_config)
-        logger.info("Dataset split according to configuration")
-    
+        logger.info('Dataset split according to configuration')
     # Save dataset if path provided
     if save_path is not None:
         save_to_parquet(dataset, save_path)
-        logger.info(f"Dataset saved to {save_path}")
-    
+        logger.info('Dataset saved to %s', save_path)
     return dataset
 
 
@@ -346,25 +377,29 @@ def load_from_parquet(path: str) -> DatasetDict | Dataset:
     """
     Load parquet dataset splits from given directory.
 
-    Checks for 'train', 'valid', and 'test' parquet files inside `path` and loads
-    available from each. Returns a DatasetDict if multiple splits exist, else a single Dataset.
+    Checks for 'train', 'valid', and 'test' parquet files inside `path`
+    and loads available from each. Returns a DatasetDict 
+    if multiple splits exist, else a single Dataset.
 
     Parameters
     ----------
     path : str
-        Root directory containing 'train', and/or 'valid', and/or 'test' parquet files.
+        Root directory containing 'train', and/or 'valid', 
+        and/or 'test' parquet files.
 
     Returns
     -------
     DatasetDict or Dataset
-        Loaded dataset object. DatasetDict if multiple splits are present; otherwise a single Dataset.
+        Loaded dataset object. DatasetDict if multiple splits are present;
+        Otherwise a single Dataset.
     """
     splits = ['train', 'valid', 'test']
-    data_files = {split: glob.glob(os.path.join(path, f'{split}.parquet')) for split in splits}
+    data_files = {split: glob.glob(os.path.join(path, f'{split}.parquet'))
+                  for split in splits}
     data_files = {k: v for k, v in data_files.items() if v}
 
     if not data_files:
-        raise ValueError("No parquet files found in 'train', 'valid', or 'test' subdirectories")
+        raise ValueError('No parquet files found')
 
     dataset = load_dataset('parquet', data_files=data_files)
 

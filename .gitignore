@@ -40,10 +40,7 @@ MANIFEST
 
 
 # Installer logs
-cpu_run.log
-cpu_run.err
-cuda12.6.log
-cuda12.6.err
+logs/
 
 # Unit test / coverage reports
 .cache
@@ -73,3 +70,4 @@ clean_data
 RuDevices.tar
 audio_cache
 main.py
+pylintrc

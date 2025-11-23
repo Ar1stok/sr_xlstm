@@ -1,46 +1,47 @@
+""" Data Process: Convert audiofile to melspectrogram """
 from __future__ import annotations
 
 import logging
 
-import librosa
-from numpy import ndarray
+import torch
+import torchaudio.transforms as T
 from datasets import Audio
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
 
-def _compute_melspectrogram(audio: Audio) -> ndarray:
+def _compute_melspectrogram(audio: Audio) -> torch.Tensor:
     """
-    Convert audiofile to melspectrogram using librosa
+    Convert audiofile to melspectrogram using torchaudio
 
     Parameters
     ----------
     audio: Audio
-        audiofile with type Audio from datasets
+        Audiofile with type Audio from datasets
     
     Returns:
     --------
-    ndarray:
-        melspectrogram like numpy array
+    torch.Tensor:
+        Mel frequency spectrogram of size (…, n_mels, time).
     """
-    signal = audio["array"]
-    sr = audio["sampling_rate"]
-    mel_spectrogram = librosa.feature.melspectrogram(
-        y=signal,
-        sr=sr,
-        win_length=400,
+    audio_signal = torch.from_numpy(audio["array"])
+    sample_rate = audio["sampling_rate"]
+    mel_spectrogram = T.MelSpectrogram(
+        sample_rate=sample_rate,
         n_fft=512,
+        win_length=400,
         hop_length=160,
-        fmin=50,
-        fmax=3500,
+        f_min=50,
+        f_max=3500,
         n_mels=32,
-        )
-    return mel_spectrogram
+    )
+    mel_spec = mel_spectrogram(audio_signal)
+    return mel_spec
 
 
 def add_melspectrogram(example):
