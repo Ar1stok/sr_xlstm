@@ -244,7 +244,7 @@ def save_to_parquet(
             dataset[split].to_parquet(
                 path_or_buf=f'{save_path}/{split}.parquet'
             )
-            logger.info('%d part of dataset was saved to clean_data', split)
+            logger.info('%s part of dataset was saved to clean_data', split)
     else:
         dataset.to_parquet(path_or_buf=f'{save_path}/dataset.parquet')
         logger.info('Dataset was saved to clean_data')
@@ -289,12 +289,9 @@ def to_dataset(
         - ``'seed'`` : int, optional
             Random seed for reproducibility.
             
-        Example: ``{
-                    'train_size': 0.8, 
-                    'valid_size': 0.1, 
-                    'test_size': 0.1, 
-                    'seed': 42
-                    }``
+        Example: 
+        ``{'train_size': 0.8,'valid_size': 0.1,'test_size': 0.1,'seed': 42}``
+        
         Default is None.
     save_path : str, optional
         Path where the dataset should be saved in .parquet format. 

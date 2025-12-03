@@ -1,0 +1,38 @@
+name: sr_xlstm
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - cuda=12.6
+  - cuda-nvcc=12.6
+  - gxx_linux-64=13.2.0
+  - python=3.11
+  - pip
+  - cmake
+  - ninja
+  - ffmpeg
+  - cuda-toolkit=12.6
+  - cuda-cccl=12.6
+  - pip:
+      - --index-url https://download.pytorch.org/whl/cu126
+      - --extra-index-url https://pypi.org/simple
+      - torch==2.8.0
+      - torchvision==0.23.0
+      - torchaudio==2.8.0
+      - pre-commit
+      - ipykernel
+      - dacite
+      - omegaconf
+      - torchmetrics==1.8.2
+      - tqdm
+      - pytest
+      - pytest-xdist
+      - numpy<2.0
+      - librosa
+      - transformers
+      - datasets
+      # - torchodec==0.7.0 (нужно установить вручную)

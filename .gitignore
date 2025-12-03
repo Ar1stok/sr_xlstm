@@ -71,3 +71,4 @@ RuDevices.tar
 audio_cache
 main.py
 pylintrc
+tokenizer
