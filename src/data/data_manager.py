@@ -147,7 +147,7 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
                         train_size, valid_size
                     )
                     raise ValueError(
-                        'train_size + valid_size ' \
+                        'train_size + valid_size '
                         'cannot exceed 1.0 for proportions.'
                     )
             else:
@@ -165,7 +165,7 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
                     )
 
         logger.info(
-            'Splitting into 3 sets: ' \
+            'Splitting into 3 sets: '
             'train_size= %f, valid_size=%f, test_size=%f',
             train_size, valid_size, test_size
         )
@@ -228,9 +228,9 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
 
 
 def save_to_parquet(
-        dataset: Optional[DatasetDict | Dataset],
-        save_path: str
-        ) -> None:
+    dataset: Optional[DatasetDict | Dataset],
+    save_path: str
+) -> None:
     """Save Dataset in .parquet format"""
     os.makedirs('clean_data', exist_ok=True)
 
@@ -251,12 +251,12 @@ def save_to_parquet(
 
 
 def to_dataset(
-        data=None,
-        root_path=None,
-        split_config=None,
-        save_path=None,
-        sampling_rate=16000,
-        ) -> Union[Dataset, DatasetDict]:
+    data=None,
+    root_path=None,
+    split_config=None,
+    save_path=None,
+    sampling_rate=16000,
+) -> Union[Dataset, DatasetDict]:
     """
     Convert audio data into a HuggingFace Dataset with audio features.
 
