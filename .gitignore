@@ -65,6 +65,7 @@ run_cpu.sh
 
 # other
 *.csv
+*.parquet
 source_data
 clean_data
 RuDevices.tar
@@ -76,7 +77,6 @@ tokenizer
 torch_extensions
 xlstm_asr_output
 wav2vec*
-filter_data
 multirun
 outputs
 trash.py

@@ -1,0 +1,5 @@
+outs:
+- md5: caba5b88d19ab941f99582636e516f3d
+  size: 262433469
+  hash: md5
+  path: valid.parquet

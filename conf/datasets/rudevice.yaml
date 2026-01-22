@@ -1,0 +1,18 @@
+# conf/datasets/rudevices.yaml
+
+# Paths
+dataset_path: ${oc.env:DATASET_PATH_FILTER, ./filter_data}
+tokenizer_path: ${oc.env:TOKENIZER_PATH, ./src/utils/tokenizer}
+
+# Count of examples
+train_n_examples: 2000
+eval_n_examples: 100
+
+# Mel-Statistic
+mel_stats_max_items: 1000
+mel_mean: 0.0
+mel_std: 1.0
+
+# For model
+vocab_size: 0  # заполним в коде после загрузки tokenizer
+blank_token: "<blank>"

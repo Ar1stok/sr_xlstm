@@ -38,4 +38,5 @@ dependencies:
       - mlstm_kernels
       - xlstm
       - hydra-core
-      # - torchodec==0.7.0 (нужно установить вручную)
+      - dvc[gdrive]
+      - torchodec==0.7.0 # нужна установка вручную если не получилось

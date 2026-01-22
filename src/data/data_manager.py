@@ -16,21 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 def load_files(root: str) -> List[Dict[str, str]]:
-    """
-    Loads audio file paths and their corresponding transcriptions 
-    from a nested directory structure.
+    """Load audio paths and transcriptions from nested directory structure.
 
-    Parameters
-    ----------
-    root : str
-        Root directory path containing subdirectories 
-        with audio (.wav) and transcription (.txt) files.
+    Expects subdirectories with paired .wav audio and .txt transcription files.
 
-    Returns
-    -------
-    List[Dict[str, str]]
-        A list of dictionaries, each with keys 'audio' (file path) 
-        and 'transcription' (text).
+    Args:
+        root: Root directory with audio/transcription subdirectories.
+
+    Returns:
+        List of dicts: [{'audio': str, 'transcription': str}, ...].
     """
     data = []
     root_path = Path(root)
@@ -53,75 +47,27 @@ def load_files(root: str) -> List[Dict[str, str]]:
 
 
 def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
-    """
-    Split a HuggingFace Dataset into train, test, and/or validation sets.
+    """Split HuggingFace Dataset into train, validation, and/or test sets.
 
-    Divides a single Dataset into multiple splits 
-    based on provided configuration.
-    Supports stratified splitting, custom seed for reproducibility, 
-    and flexible split ratios (2-way or 3-way split).
+    Supports flexible 2-way or 3-way splits with proportions or absolute sizes.
+    Ensures reproducibility via seed and validates configuration.
 
-    Parameters
-    ----------
-    dataset : Dataset
-        HuggingFace Dataset to be split.
-    split_config : dict
-        Configuration dictionary for dataset splitting with the following keys:
+    Args:
+        dataset: Input HuggingFace Dataset to split.
+        split_config: Dict with split parameters:
+            'train_size': float/int (required, 0-1 proportion or count)
+            'valid_size': float/int (optional, None for train/test only)
+            'test_size': float/int (optional, auto-calculated if missing)
+            'seed': int (optional, for reproducibility)
 
-        - ``'train_size'`` : float or int
-            Proportion (0-1) or absolute number of samples for the training set.
-            Required.
-        - ``'valid_size'`` : float or int, optional
-            Proportion (0-1) or absolute number of samples for the valid set.
-            If None, only train/test split is performed. Default is None.
-        - ``'test_size'`` : float or int, optional
-            Proportion (0-1) or absolute number of samples for the test set.
-            If not provided, automatically calculated as remaining samples.
-            Default is None.
-        - ``'seed'`` : int, optional
-            Random seed for reproducibility.
+    Returns:
+        DatasetDict with splits:
+            3-way: {'train': Dataset, 'valid': Dataset, 'test': Dataset}
+            2-way: {'train': Dataset, 'test': Dataset}
 
-    Returns
-    -------
-    DatasetDict
-        Dictionary containing split datasets. Keys depend on configuration:
-
-        - If ``'valid_size'`` is provided: 
-        ``{'train': Dataset, 'valid': Dataset, 'test': Dataset}``
-        
-        - If ``'valid_size'`` is None: 
-        ``{'train': Dataset, 'test': Dataset}``
-
-    Raises
-    ------
-    ValueError
-        If split configuration is invalid (e.g., sizes exceed total samples,
-        train_size is not provided, or sizes don't sum to 1.0 for proportions).
-    KeyError
-        If required keys are missing from `split_config`.
-
-    Examples
-    --------
-    Split into train/valid/test with equal proportions:
-
-    >>> from datasets import Dataset
-    >>> dataset = Dataset.from_dict({'text': ['a', 'b', 'c', 'd', 'e']})
-    >>> config = {
-    >>>           'train_size': 0.6, 
-    >>>           'valid_size': 0.2, 
-    >>>           'test_size': 0.2, 
-    >>>           'seed': 42
-    >>>           }
-    >>> splits = split_data(dataset, config)
-    >>> len(splits['train']), len(splits['valid']), len(splits['test'])
-    (3, 1, 1)
-
-    Split into train/test only:
-
-    >>> config = {'train_size': 0.8, 'test_size': 0.2, 'seed': 42}
-    >>> splits = split_data(dataset, config)
-    >>> len(splits['train']), len(splits['test'])
-    (4, 1)
+    Raises:
+        ValueError: Invalid split sizes or proportions summing > 1.0.
+        KeyError: Missing required 'train_size' in config.
     """
     # Extract configuration values
     train_size = split_config.get('train_size')
@@ -231,7 +177,15 @@ def save_to_parquet(
     dataset: Optional[DatasetDict | Dataset],
     save_path: str
 ) -> None:
-    """Save Dataset in .parquet format"""
+    """Save Dataset or DatasetDict to parquet files.
+
+    Handles both single Dataset and DatasetDict (train/valid/test splits).
+    Creates 'clean_data' directory automatically.
+
+    Args:
+        dataset: Dataset or DatasetDict to save.
+        save_path: Base path for saving parquet files.
+    """
     os.makedirs('clean_data', exist_ok=True)
 
     if isinstance(dataset, DatasetDict):
@@ -244,10 +198,10 @@ def save_to_parquet(
             dataset[split].to_parquet(
                 path_or_buf=f'{save_path}/{split}.parquet'
             )
-            logger.info('%s part of dataset was saved to clean_data', split)
+            logger.info('%s part of dataset was saved to %s', split, save_path)
     else:
         dataset.to_parquet(path_or_buf=f'{save_path}/dataset.parquet')
-        logger.info('Dataset was saved to clean_data')
+        logger.info('Dataset was saved to: %s', save_path)
 
 
 def to_dataset(
@@ -257,79 +211,24 @@ def to_dataset(
     save_path=None,
     sampling_rate=16000,
 ) -> Union[Dataset, DatasetDict]:
-    """
-    Convert audio data into a HuggingFace Dataset with audio features.
+    """Convert audio data to HuggingFace Dataset with audio features.
 
-    Loads audio data from either a list of dictionaries or a directory path,
-    then converts it into a HuggingFace Dataset with specified audio features
-    and transcriptions. Optionally splits the dataset and saves to disk.
+    Loads from list of dicts or directory path. Supports optional splitting and
+    parquet saving.
 
-    Parameters
-    ----------
-    data : list of dict, optional
-        List where each element is a dictionary with keys ``'audio'`` and 
-        ``'transcription'``. Either `data` or `root_path` must be provided.
-        Default is None.
-    root_path : str, optional
-        Path to the directory or file containing the audio data. 
-        If provided, data is loaded from this path. Either `data` or 
-        `root_path` must be provided. Default is None.
-    split_config : dict, optional
-        Configuration for dataset splitting. If None, no splitting is performed.
-        Expected keys:
-        
-        - ``'train_size'`` : float or int
-            Proportion (0-1) or absolute number of samples for training set.
-        - ``'valid_size'`` : float or int, optional
-            Proportion (0-1) or absolute number of samples for validation set.
-        - ``'test_size'`` : float or int, optional
-            Proportion (0-1) or absolute number of samples for test set.
-        - ``'stratify'`` : str, optional
-            Column name to use for stratified splitting.
-        - ``'seed'`` : int, optional
-            Random seed for reproducibility.
-            
-        Example: 
-        ``{'train_size': 0.8,'valid_size': 0.1,'test_size': 0.1,'seed': 42}``
-        
-        Default is None.
-    save_path : str, optional
-        Path where the dataset should be saved in .parquet format. 
-        If None, dataset is not saved to disk. Default is None.
-    sampling_rate : int, optional
-        Target sampling rate for audio in Hz. Default is 16000.
+    Args:
+        data: List of dicts with 'audio' (path) and 'transcription' keys.
+        root_path: Directory path to load audio data.
+        split_config: Dict for splitting 
+          {'train_size': ..., 'valid_size': ..., ...}.
+        save_path: Path to save parquet files; None to skip.
+        sampling_rate: Target audio sampling rate in Hz.
 
-    Returns
-    -------
-    Dataset or DatasetDict
-        If `split_config` is None, returns a single HuggingFace Dataset.
-        If `split_config` is provided, returns a DatasetDict with splits
-        (e.g., train, valid, test) as specified in the configuration.
+    Returns:
+        Dataset (no split) or DatasetDict (with splits: train/valid/test).
 
-    Examples
-    --------
-    Create a dataset from a list of dictionaries:
-    
-    >>> data = [
-    ...     {'audio': '/path/to/audio1.wav', 
-    ...      'transcription': 'Example of transcription one'},
-    ...     {'audio': '/path/to/audio2.wav', 
-    ...      'transcription': 'Example of transcription two'}
-    ... ]
-    >>> dataset = to_dataset(data=data)
-    {'audio': Audio(sampling_rate=16000, decode=True),
-    'transcription': Value('string')}
-    
-    Load data from directory and split into train/valid/test:
-    
-    >>> config = {'train_size': 0.7, 'valid_size': 0.15, 'test_size': 0.15}
-    >>> dataset_dict = to_dataset(
-    ...     root_path='/path/to/audio_dir',
-    ...     split_config=config,
-    ...     save_path='/path/to/save'
-    ... )
-    >>> dataset_dict.keys()
-    dict_keys(['train', 'valid', 'test'])
+    Raises:
+        ValueError: Neither data nor root_path provided.
     """
     # Validate input parameters
     if data is None and root_path is None:
@@ -363,6 +262,7 @@ def to_dataset(
     if split_config is not None:
         dataset = split_data(dataset, split_config)
         logger.info('Dataset split according to configuration')
+
     # Save dataset if path provided
     if save_path is not None:
         save_to_parquet(dataset, save_path)
@@ -371,24 +271,16 @@ def to_dataset(
 
 
 def load_from_parquet(path: str) -> DatasetDict | Dataset:
-    """
-    Load parquet dataset splits from given directory.
+    """Load parquet dataset splits from directory.
 
-    Checks for 'train', 'valid', and 'test' parquet files inside `path`
-    and loads available from each. Returns a DatasetDict 
-    if multiple splits exist, else a single Dataset.
+    Searches for train.parquet, valid.parquet, test.parquet. 
+    Returns DatasetDict for multiple splits or single Dataset otherwise.
 
-    Parameters
-    ----------
-    path : str
-        Root directory containing 'train', and/or 'valid', 
-        and/or 'test' parquet files.
+    Args:
+        path: Directory with parquet files (train/valid/test.parquet).
 
-    Returns
-    -------
-    DatasetDict or Dataset
-        Loaded dataset object. DatasetDict if multiple splits are present;
-        Otherwise a single Dataset.
+    Returns:
+        DatasetDict (multi-split) or Dataset (single file).
     """
     splits = ['train', 'valid', 'test']
     data_files = {split: glob.glob(os.path.join(path, f'{split}.parquet'))

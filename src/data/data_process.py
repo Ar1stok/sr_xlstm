@@ -1,4 +1,4 @@
-""" Data Processing: mel-spectrograms, tokenization, and dynamic padding. """
+"""Data process for ASR: mel-spectrogram, tokenize, and dynamic padd."""
 from __future__ import annotations
 
 import logging
@@ -9,283 +9,408 @@ import numpy as np
 import torch
 import torchaudio.transforms as T
 from datasets import Dataset, DatasetDict
-from librosa.feature import melspectrogram
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, Wav2Vec2Processor
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
+    format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def to_waveform(
+    dataset: Dataset | DatasetDict,
+    processor: Wav2Vec2Processor,
+) -> Dataset | DatasetDict:
+    """Convert raw audio data to normalized waveform tensors for Wav2Vec2.
+
+    This function processes datasets containing 'audio' column and 
+    adds 'input_values' column with normalized float32 waveforms 
+    suitable for Wav2Vec2 models.
+
+    Args:
+        dataset: Input dataset(s) containing 'audio' column with raw audio data.
+        processor: Pre-trained Wav2Vec2 processor for audio normalization and
+        resampling.
+
+    Returns:
+        Processed dataset with additional 'input_values' column containing
+        normalized torch.Tensor waveforms (float32, range [-1.0, 1.0]).
+    """
+    def _process_batched(example):
+        audio_array = example["audio"]["array"]
+        inputs = processor(
+            audio_array,
+            sampling_rate=16000,
+            return_tensors="pt",
+            padding=False
+        )
+        example["input_values"] = inputs.input_values[0]
+        return example
+
+    logger.info("Starting waveform processing...")
+    processed = dataset.map(
+        _process_batched,
+        batched=False,
+        remove_columns=None)
+    logger.info("Processing completed, added 'input_values' column")
+
+    return processed
 
 
 def to_melspectrogram(
     dataset: Dataset | DatasetDict,
-    method: str = "default"
+    n_mels: int = 32,
+    sr: int = 16000,
+    n_fft: int = 400,
+    hop_length: int = 160,
+    batch_size: int = 64,
 ) -> Dataset | DatasetDict:
-    """Add melspectrogram to dataset as "input_mel_ids" column.
-  
+    """Compute batched mel-spectrograms with normalization.
+
+    Uses PyTorch transforms for CPU/GPU compatibility. 
+    Outputs (T, n_mels) shape.
+    Removes 'audio' column after processing.
+    
     Args:
-        dataset: HuggingFace dataset with audiodata.
-        method: Computation method ("default", "librosa" or "torch").
+        dataset: Dataset with 'audio' column (dict: array, sampling_rate).
+        n_mels: Number of Mel frequency bins.
+        sr: Audio sampling rate in Hz.
+        n_fft: FFT window length.
+        hop_length: Hop length between frames.
+        batch_size: Batch size for processing.
     
     Returns:
-        Dataset or DatasetDict with an added "input_mel_ids" column.
-    
-    Raises:
-        ValueError: If method is not in the supported values.
+        Dataset/DatasetDict with 'input_values' column 
+        of shape (time_steps, n_mels).
     """
-    logger.info("Starting mel-spectrogram computation with method: %s", method)
-    def _process_librosa(example):
-        """Compute melspectrogram using librosa"""
-        audio = example["audio"]
-        audio_signal = audio["array"]
-        sampling_rate = audio["sampling_rate"]
+    logger.info(
+        "PyTorch batched mel (n_mels=%d, batch_size=%d)", 
+        n_mels,
+        batch_size)
 
-        mel_spec = melspectrogram(
-            y=audio_signal,
-            sr=sampling_rate,
-            n_fft=512,
-            win_length=400,
-            hop_length=160,
-            fmin=50,
-            fmax=3500,
-            n_mels=32,
-        )
-        example["input_mel_ids"] = torch.from_numpy(mel_spec)
-        return example
+    mel_transform = T.MelSpectrogram(
+        sample_rate=sr,
+        n_fft=n_fft,
+        win_length=n_fft,
+        hop_length=hop_length,
+        f_min=0.0,
+        f_max=sr / 2,
+        n_mels=n_mels,
+        normalized=False,
+        mel_scale="slaney")
 
-    def _process_torch(example):
-        """Compute melspectrogram using torchaudio"""
-        audio = example["audio"]
-        audio_signal = torch.from_numpy(audio["array"])
-        sampling_rate = audio["sampling_rate"]
-        mel_spectrogram = T.MelSpectrogram(
-            sample_rate=sampling_rate,
-            n_fft=512,
-            win_length=400,
-            hop_length=160,
-            f_min=50,
-            f_max=3500,
-            n_mels=32,
-        )
-        mel_spec = mel_spectrogram(audio_signal)
-        example["input_mel_ids"] = mel_spec
-        return example
+    def _process_batched(batched):
+        mel_list = []
+        for a in batched["audio"]:
+            waveform = torch.from_numpy(
+                np.array(a["array"], dtype=np.float32)).unsqueeze(0)  # (1, L)
+            mel = mel_transform(waveform).squeeze(0)  # (F, T)
+            mel = T.AmplitudeToDB(stype="power")(mel)
+            # Normalize per spec: subtract mean, divide by std along time.
+            mean = mel.mean(dim=-1, keepdim=True)
+            std = mel.std(dim=-1, keepdim=True) + 1e-6
+            mel_norm = (mel - mean) / std
+            mel_list.append(mel_norm.t().numpy())  # (T, F)
+        batched["input_values"] = mel_list
+        return batched
 
-    if method in ("default", "librosa"):
-        processed_data = dataset.map(
-            _process_librosa,
-            batched=False,
-            desc="Computing mel-spectrograms (librosa)"
-        )
-    elif method == "torch":
-        processed_data = dataset.map(
-            _process_torch,
-            batched=False,
-            desc="Computing mel-spectrograms (torchaudio)"
-        )
-    else:
-        error_msg = f"Unknown method: {method}. Supported: 'torch', 'librosa'"
-        raise ValueError(error_msg)
-    logger.info("Mel-spectrogram computation completed")
-    return processed_data
+    processed = dataset.map(
+        _process_batched,
+        batched=True,
+        batch_size=batch_size,
+        desc="PyTorch MelSpectrogram",
+        remove_columns=["audio"],
+    )
+
+    logger.info("Mel-spectrogram computation complete.")
+    return processed
 
 
 def tokenize_labels(
     tokenizer_path: str,
     dataset: DatasetDict | Dataset
 ) -> Dataset | DatasetDict:
-    """Tokenizes transcriptions and adds "input_label_ids" column.
-  
+    """Tokenizes transcriptions and adds 'input_ids' column.
+    
     Args:
-        tokenizer_path: Path or model id for the tokenizer
-            (Whisper tokenizer is recommended for ASR).
-        dataset: HuggingFace Dataset with a "transcription" column.
+        tokenizer_path: Path to pretrained tokenizer directory.
+        dataset: Dataset with a "transcription" column.
     
     Returns:
-        Dataset or DatasetDict with an added "input_label_ids" column.
+        Dataset/DatasetDict with added 'input_ids' column (list of int).
     """
-
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-    logger.info("Tokenizer loaded (vocab_size=%d)", tokenizer.vocab_size)
+    logger.info(
+        "Tokenizer loaded (vocab_size=%d, blank_id=%d)", 
+        len(tokenizer),
+        tokenizer.pad_token_id)
 
     def _tokenize_function(example):
-        """Tokenizes a single example."""
-        tokenized = tokenizer(
+        model_inputs = tokenizer(
             example["transcription"],
-            truncation=False,
             return_tensors=None,
+            add_special_tokens=False
         )
-        example["input_label_ids"] = tokenized["input_ids"]
+        label_ids = np.array(model_inputs["input_ids"], dtype=np.int64)
+        if tokenizer.pad_token_id is not None:
+            pad_id = np.int64(tokenizer.pad_token_id)
+            label_ids[label_ids == pad_id] = np.int64(-100)
+        example["input_ids"] = label_ids.tolist()
         return example
+
     tokenized_data = dataset.map(
         _tokenize_function,
         batched=False,
         desc="Tokenizing transcriptions",
+        remove_columns=[]
     )
-    logger.info("Tokenize complete")
+    logger.info("Tokenization complete")
     return tokenized_data
 
 
 @dataclass
 class DataCollatorASRWithPadding:
+    """Data collator for ASR with mel-spectrograms and dynamic padding.
+
+    Pads input_values to (batch, time, n_mels) and labels to (batch, seq_len).
+    Supports fixed n_mels, attention_mask, length tracking, and
+    padding to multiple. Handles transposition detection for input shapes.
     """
-    Data collator for ASR tasks with xLSTM models.
-    
-    Dynamically pads:
-    - input_mel_ids: 2D mel-spectrogram sequences (n_mels, time_steps)
-    - input_label_ids: 1D token sequences
-    
-    Attributes:
-        max_input_length (int, optional): Maximum mel-spectrogram time dim.
-            If None, uses the longest sequence in the batch.
-        max_labels_length (int, optional): Maximum label sequence length.
-            If None, uses the longest sequence in the batch.
-        padding_value (float): Value used for padding mel-spectrograms.
-        labels_pad_token_id (int): Token ID used for padding labels.
-    """
+    fixed_n_mels: Optional[int] = 32
     max_input_length: Optional[int] = None
     max_labels_length: Optional[int] = None
     padding_value: float = 0.0
     labels_pad_token_id: int = -100
+    pad_to_multiple_of: Optional[int] = None
+    pad_to_multiple_of_labels: Optional[int] = None
+
     def __call__(
-        self, batch: List[Dict[str, Union[List, np.ndarray, torch.Tensor]]]
+        self,
+        batch: List[Dict[str, Union[List, np.ndarray, torch.Tensor]]]
     ) -> Dict[str, torch.Tensor]:
-        """
-        Process a batch of examples for ASR training.
-        
+        """Pad batch dynamically.
+
         Args:
-            batch: List of dictionaries with keys:
-                - 'input_mel_ids': 2D array of shape (n_mels, time_steps)
-                - 'input_label_ids': 1D array of token IDs
-                - 'audio' (optional): Audio metadata (discarded)
-                - 'transcription' (optional): Original text (discarded)
-        
+        batch: List of dicts with 'input_values' (2D mel np.array) 
+          and 'input_ids'.
+
         Returns:
-            Dict with batched tensors:
-                - 'input_ids': Padded mel-spectrograms
-                - 'labels': Padded token sequences
-                - 'input_ids_lengths': Actual lengths before padding
-                - 'labels_lengths': Actual label lengths before padding
+        Dict with padded tensors: input_values, input_ids (labels),
+          attention_mask, input_lengths, targets_lengths.
+
+        Raises:
+        RuntimeError: If batch empty or missing keys/shapes invalid.
         """
         if not batch:
             raise RuntimeError("Batch is empty!")
-        # Extract mel-spectrograms and labels
-        input_ids_list = []
+
+        input_values_list = []
         labels_list = []
-        input_ids_lengths = []
-        labels_lengths = []
+        input_lengths = []
+        targets_lengths = []
+
+        # Extract and validate
         for example in batch:
-            # Validate required keys
-            if "input_mel_ids" not in example:
-                raise RuntimeError(
-                    f"Example missing 'input_mel_ids'. "
-                    f"Available keys: {list(example.keys())}"
-                )
-            if "input_label_ids" not in example:
-                raise RuntimeError(
-                    f"Example missing 'input_label_ids'. "
-                    f"Available keys: {list(example.keys())}"
-                )
-            # Convert to numpy with explicit dtype
-            mel_ids = np.array(example["input_mel_ids"], dtype="float32")
-            label_ids = np.array(example["input_label_ids"], dtype="int64")
-            # === FORM NORMALIZATION ===
-            # Converting mel_ids to 2D (n_mels, time)
-            if mel_ids.ndim != 2:
-                raise RuntimeError(
-                    f"mel_ids should be 2D after normalization, "
-                    f"got {mel_ids.ndim}D "
-                    f"shape {mel_ids.shape}"
-                )
-            n_mels_ex, time_ex = mel_ids.shape
-            # Check the axes:
-            # if suddenly (time, n_mels) instead of (n_mels, time)
-            # We assume that n_mels always == 32, so if the first axis >> 32,
-            # it is probably time
-            if n_mels_ex > 64 and time_ex <= 64:
-                # Maybe (time, 32) → transpose (32, time)
-                mel_ids = mel_ids.T
-                n_mels_ex, time_ex = mel_ids.shape
-            # Save the original length over time (before padding/truncate)
-            input_ids_lengths.append(time_ex)
-            # Check label_ids
-            if label_ids.ndim != 1:
-                raise RuntimeError(
-                    f"label_ids should be 1D, "
-                    f"got {label_ids.ndim}D shape {label_ids.shape}"
-                )
-            labels_lengths.append(len(label_ids))
-            # Add to the list for further processing
-            input_ids_list.append(mel_ids)
+            if "input_values" not in example:
+                raise RuntimeError(f"Example missing 'input_values'. Keys: \
+                                   {list(example.keys())}")
+            if "input_ids" not in example:
+                raise RuntimeError(f"Example missing 'input_ids'. Keys: \
+                                   {list(example.keys())}")
+
+            mel_spec = np.array(example["input_values"], dtype="float32")
+            label_ids = np.array(example["input_ids"], dtype="int64")
+
+            if mel_spec.ndim != 2:
+                raise RuntimeError(f"input_values must be 2D, \
+                                   got {mel_spec.ndim}D {mel_spec.shape}")
+
+            # Auto-transpose if needed: ensure (n_mels, time).
+            n_mels_ex, time_ex = mel_spec.shape
+            if time_ex < n_mels_ex:
+                mel_spec = mel_spec.T
+                n_mels_ex, time_ex = time_ex, n_mels_ex
+
+            if self.fixed_n_mels and n_mels_ex != self.fixed_n_mels:
+                raise RuntimeError(f"Expected n_mels={self.fixed_n_mels}, \
+                                   got {n_mels_ex}")
+
+            input_lengths.append(time_ex)
+            targets_lengths.append(len(label_ids))
+            input_values_list.append(mel_spec)
             labels_list.append(label_ids)
-        # === CALCULATE THE MAXIMUM DIMENSIONS ===
-        max_n_mels = max(ids.shape[0] for ids in input_ids_list)
-        max_time_in_batch = max(ids.shape[1] for ids in input_ids_list)
-        if self.max_input_length is not None:
-            max_time_steps = min(max_time_in_batch, self.max_input_length)
-        else:
-            max_time_steps = max_time_in_batch
-        if self.max_labels_length is not None:
-            max_label_len = self.max_labels_length
-        else:
-            max_label_len = max(len(labels) for labels in labels_list)
-        # === PADDING MEL-SPECTROGRAMS ===
-        padded_input_ids = torch.full(
-            (len(batch), max_n_mels, max_time_steps),
-            fill_value=self.padding_value,
-            dtype=torch.float32
+
+        batch_size = len(batch)
+        n_mels = self.fixed_n_mels or max(spec.shape[0]
+                                          for spec in input_values_list)
+
+        # Compute max lengths with padding multiples.
+        max_time_in_batch = max(spec.shape[1] for spec in input_values_list)
+        max_time_steps = self._pad_to_multiple(
+            min(max_time_in_batch, self.max_input_length or float("inf")))
+        max_label_len = self._pad_to_multiple(
+            min(max(len(lab) for lab in labels_list),
+                self.max_labels_length or float("inf")))
+
+        # Pad input_values: (batch, n_mels, max_time) → transpose to (B, T, C)
+        padded_input_values = torch.full(
+            (batch_size, n_mels, max_time_steps),
+            self.padding_value,
+            dtype=torch.float32,
         )
-        for i, mel_ids in enumerate(input_ids_list):
-            mel_ids = mel_ids.astype("float32")  # guarantees float32
-            n_mels_ex, time_ex = mel_ids.shape
-            # (1) Time truncation > (if needed)
+        attention_mask = torch.zeros(
+            (batch_size, max_time_steps),
+            dtype=torch.long)
+
+        for i, mel_spec in enumerate(input_values_list):
+            mel_spec = mel_spec.astype("float32")
+            n_mels_ex, time_ex = mel_spec.shape
+
+            # Truncate
             if time_ex > max_time_steps:
-                mel_ids = mel_ids[:, :max_time_steps]
+                mel_spec = mel_spec[:, :max_time_steps]
                 time_ex = max_time_steps
-            # (2) Padding by time < (if needed)
+
+            # Pad time dim
             if time_ex < max_time_steps:
                 pad_time = max_time_steps - time_ex
-                mel_ids = np.pad(
-                    mel_ids,
+                mel_spec = np.pad(
+                    mel_spec,
                     ((0, 0), (0, pad_time)),
                     mode="constant",
-                    constant_values=self.padding_value
-                )
-                time_ex = max_time_steps
-            # (3) Check before assignment
-            expected_shape = (max_n_mels, max_time_steps)
-            if mel_ids.shape != expected_shape:
-                raise RuntimeError(
-                    f"Bad mel shape after padding: {mel_ids.shape}, "
-                    f"expected {expected_shape}"
-                )
-            padded_input_ids[i] = torch.from_numpy(mel_ids)
-        # === PADDING LABELS ===
+                    constant_values=self.padding_value)
+
+            # Pad n_mels (rare)
+            if n_mels_ex < n_mels:
+                pad_mels = n_mels - n_mels_ex
+                mel_spec = np.pad(
+                    mel_spec,
+                    ((0, pad_mels), (0, 0)),
+                    mode="constant",
+                    constant_values=self.padding_value)
+
+            padded_input_values[i] = torch.from_numpy(mel_spec)
+            attention_mask[i, :time_ex] = 1
+
+        padded_input_values = padded_input_values.transpose(1, 2) # (B, T, C)
+
+        # Pad labels with -100 masking.
         padded_labels = torch.full(
-            (len(batch), max_label_len),
-            fill_value=self.labels_pad_token_id,
-            dtype=torch.int64
-        )
+            (batch_size, max_label_len),
+            self.labels_pad_token_id,
+            dtype=torch.long)
+        label_mask = torch.zeros((batch_size, max_label_len), dtype=torch.long)
+
         for i, labels in enumerate(labels_list):
-            labels = labels.astype("int64")
-            # truncation if needed
-            if len(labels) > max_label_len:
-                labels = labels[:max_label_len]
-            padded_labels[i, :len(labels)] = torch.from_numpy(labels)
-        # === FINAL BATCH ===
-        batch_dict = {
-            "input_ids": padded_input_ids,
-            "labels": padded_labels,
-            "input_ids_lengths": torch.tensor(
-                input_ids_lengths,
-                dtype=torch.int32
-            ),
-            "labels_lengths": torch.tensor(
-                labels_lengths,
-                dtype=torch.int32
-            ),
+            labels = labels.astype("long")
+            trunc_len = min(len(labels), max_label_len)
+            padded_labels[i, :trunc_len] = torch.from_numpy(labels[:trunc_len])
+            label_mask[i, :trunc_len] = 1
+
+        # Apply masking to labels (like CTCWithPadding)
+        padded_labels = padded_labels.masked_fill(
+            label_mask.eq(0),
+            self.labels_pad_token_id)
+
+        return {
+            "input_values": padded_input_values,
+            "input_ids": padded_labels,
+            "attention_mask": attention_mask,
+            "input_lengths": torch.tensor(input_lengths, dtype=torch.long),
+            "targets_lengths": torch.tensor(targets_lengths, dtype=torch.long),
         }
-        return batch_dict
+
+    def _pad_to_multiple(
+            self,
+            length: int,
+            multiple: Optional[int] = None
+        ) -> int:
+        """Pad length to nearest multiple for efficient conv/TensorCores.
+
+        Args:
+        length: Original length.
+        multiple: Padding multiple; defaults to self.pad_to_multiple_of.
+
+        Returns:
+        Padded length.
+        """
+        if multiple is None:
+            multiple = getattr(self, "pad_to_multiple_of", None) or 1
+        if multiple > 1:
+            length = ((length + multiple - 1) // multiple) * multiple
+        return length
+
+
+@dataclass
+class DataCollatorCTCWithPadding:
+    """Standard CTC data collator using Wav2Vec2Processor.
+
+    Dynamically pads waveforms and labels. Replaces padding in labels with -100.
+    """
+
+    processor: Wav2Vec2Processor
+    padding: Union[bool, str] = True
+    max_length: Optional[int] = None
+    max_length_labels: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = None
+    pad_to_multiple_of_labels: Optional[int] = None
+
+    def __init__(
+            self,
+            processor,
+            padding=True,
+            max_length=None,
+            max_length_labels=None,
+            sample_rate=16_000
+        ):
+        self.processor = processor
+        self.padding = padding
+        self.max_length = max_length
+        self.max_length_labels = max_length_labels
+        self.sample_rate = sample_rate
+
+    def __call__(
+            self,
+            features: List[Dict[str, Union[List[int], torch.Tensor]]]
+            ) -> Dict[str, torch.Tensor]:
+        """Pad batch using processor.
+
+        Args:
+        features: List of feature dicts with 'input_values' and 'input_ids'.
+
+        Returns:
+        Padded batch dict.
+        """
+        # Split for different padding strategies.
+        input_features = [{"input_values": feature["input_values"]}
+                          for feature in features]
+        print(f"input_features: {input_features}")
+        label_features = [{"input_ids": feature["input_ids"]}
+                          for feature in features]
+        print(f"label_features: {label_features}")
+
+        # Pad audio features.
+        batch = self.processor.feature_extractor.pad(
+            input_features,
+            padding=self.padding,
+            max_length=self.max_length,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            return_tensors="pt",
+        )
+
+        # Pad labels.
+        input_ids = self.processor.tokenizer.pad(
+            label_features,
+            padding=self.padding,
+            max_length=self.max_length_labels,
+            pad_to_multiple_of=self.pad_to_multiple_of_labels,
+            return_tensors="pt",
+        )
+
+        # Mask padding for loss.
+        input_ids = input_ids["input_ids"].masked_fill(
+            input_ids.attention_mask.ne(1), -100)
+
+        batch["input_ids"] = input_ids
+        return batch

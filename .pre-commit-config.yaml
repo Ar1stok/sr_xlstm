@@ -3,14 +3,14 @@ repos:
     hooks:
       - id: isort
         name: isort
-        entry: isort src/ --skip=main.py
+        entry: isort src/ --skip=test_module.py,test_train.py,trash.py
         language: system
         types: [ python ]
         pass_filenames: false
       
       - id: pylint
         name: pylint
-        entry: pylint --rcfile=./pylintrc src/ --ignore=main.py --disable=W0613
+        entry: pylint --rcfile=./pylintrc src/ --ignore=test_module.py,test_train.py,trash.py --disable=W0613
         language: system
         types: [ python ]
         pass_filenames: false

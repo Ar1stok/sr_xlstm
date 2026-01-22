@@ -1,0 +1,15 @@
+defaults:
+  - datasets: rudevice
+  - models: xlstm_asr
+  - trainer: hf_trainer
+  - _self_
+
+# Settings
+experiment_name: "xlstm_rudevice"
+output_dir: "./outputs"
+seed: 42
+alpha: 0.0
+
+# Logging & Debug
+log_level: "INFO"
+debug: false
