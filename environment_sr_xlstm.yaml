@@ -17,6 +17,7 @@ dependencies:
   - ffmpeg
   - cuda-toolkit=12.6
   - cuda-cccl=12.6
+  - tensorboard
   - pip:
       - --index-url https://download.pytorch.org/whl/cu126
       - --extra-index-url https://pypi.org/simple
@@ -32,7 +33,9 @@ dependencies:
       - pytest
       - pytest-xdist
       - numpy<2.0
-      - librosa
       - transformers
       - datasets
+      - mlstm_kernels
+      - xlstm
+      - hydra-core
       # - torchodec==0.7.0 (нужно установить вручную)

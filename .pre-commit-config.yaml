@@ -10,7 +10,7 @@ repos:
       
       - id: pylint
         name: pylint
-        entry: pylint --rcfile=./pylintrc src/ --ignore=main.py
+        entry: pylint --rcfile=./pylintrc src/ --ignore=main.py --disable=W0613
         language: system
         types: [ python ]
         pass_filenames: false
