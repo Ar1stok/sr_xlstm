@@ -3,14 +3,38 @@ import logging
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
+import torch
 from transformers import AutoTokenizer
 
 from data.data_manager import load_from_parquet
+from data.iterable_dataset import ZipAudioDataset
 from trainer import TrainerxLSTM
 from utils.metrics import call_compute_wer
-from utils.utils import compute_mel_stats
+from utils.utils import compute_mel_stats, compute_mfcc_stats
 
 logger = logging.getLogger(__name__)
+
+ZIP_FOLDER = "/storage0/kpa/datasets/speech/sova/RuYouTube"
+ZIP_LIST = [
+    "part_0.zip", "part_1.zip",
+    "part_2.zip", "part_3.zip",
+    "part_4.zip", "part_5.zip",
+    "part_6.zip", "part_7.zip",
+    "part_8.zip", "part_9.zip",
+    "part_10.zip", "part_11.zip",
+    "part_12.zip", "part_13.zip",
+    "part_14.zip", "part_15.zip",
+    "part_16.zip", "part_17.zip",
+    "part_18.zip", "part_19.zip",
+    "part_20.zip", "part_21.zip",
+    "part_22.zip", "part_23.zip",
+    "part_24.zip", "part_25.zip",
+    "part_26.zip", "part_27.zip",
+    "part_28.zip", "part_29.zip",
+    "part_30.zip", "part_31.zip",
+    "part_32.zip", "part_33.zip",
+    "part_34.zip", "part_35.zip",
+]
 
 @hydra.main(version_base=None, config_path="../conf", config_name="config")
 def main(cfg: DictConfig):
@@ -18,6 +42,7 @@ def main(cfg: DictConfig):
     # Log configuration.
     yaml_config = OmegaConf.to_yaml(cfg)
     logger.info("\n%s", yaml_config)
+    checkpoint = cfg.get("checkpoint_dir", None)
 
     # Load tokenizer and update vocab size.
     tokenizer = AutoTokenizer.from_pretrained(cfg.datasets.tokenizer_path)
@@ -26,30 +51,37 @@ def main(cfg: DictConfig):
 
     blank_token = cfg.datasets.blank_token
     blank_id = tokenizer.convert_tokens_to_ids(blank_token)
+    logger.info(f"Tokenizer init")
 
-    # Load datasets.
-    dataset = load_from_parquet(path=cfg.datasets.dataset_path)
-    train_dataset = dataset["train"].select(
-        range(cfg.datasets.train_n_examples)
+    # Load Datasets
+    train_dataset = ZipAudioDataset(
+        zip_path=ZIP_FOLDER,
+        zip_list=ZIP_LIST,
+        chunk_size=10000,
+        tokenizer_path=cfg.datasets.tokenizer_path,
+        debug=cfg.debug,
+        max_audio_seconds=20,
+        max_tokens=None,
     )
-    eval_dataset = dataset["valid"].select(
+    logger.info(f"train_dataset init")
+
+    dataset = load_from_parquet(path=cfg.datasets.dataset_path)
+    eval_dataset = dataset.select(
         range(cfg.datasets.eval_n_examples)
     )
+    logger.info(f"eval_dataset init")
 
-    # Compute mel spectrogram statistics.
-    mel_mean, mel_std = compute_mel_stats(
-        train_dataset, max_items=cfg.datasets.mel_stats_max_items
-    )
-    cfg.datasets.mel_mean = mel_mean
-    cfg.datasets.mel_std = mel_std
-    logger.info("Mel stats: mean=%.3f, std=%.3f", mel_mean, mel_std)
+    # Initialize mean & std.
+    mfcc_mean = torch.tensor([cfg.datasets.MFCC_GLOBAL_MEAN])
+    mfcc_std = torch.tensor([cfg.datasets.MFCC_GLOBAL_STD])
+    logger.info(f"mfcc_mean: {mfcc_mean}, mfcc_std: {mfcc_std}")
 
     # Instantiate model, training arguments, and data collator.
     model = hydra.utils.instantiate(
         cfg.models,
         num_classes=vocab_size,
-        mel_mean=mel_mean,
-        mel_std=mel_std,
+        mean_global=mfcc_mean,
+        std_global=mfcc_std,
     )
 
     training_args = hydra.utils.instantiate(cfg.trainer.training_args)
@@ -77,7 +109,13 @@ def main(cfg: DictConfig):
     OmegaConf.save(cfg, cfg_path)
     logger.info("Saved config to %s", cfg_path)
 
-    # Run training and evaluation.
+    # Test on one Batch
+    batch = next(iter(trainer.get_train_dataloader()))
+    logger.info(f"Batch keys: {batch.keys()}")
+    logger.info(f"Shapes: {batch['input_values'].shape}") 
+    logger.info(f"Batch: {batch}")
+
+    # Run training and evaluation (resume_from_checkpoint=checkpoint).
     trainer.train()
     trainer.evaluate()
     trainer.save_model()

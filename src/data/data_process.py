@@ -111,7 +111,7 @@ def to_melspectrogram(
             mean = mel.mean(dim=-1, keepdim=True)
             std = mel.std(dim=-1, keepdim=True) + 1e-6
             mel_norm = (mel - mean) / std
-            mel_list.append(mel_norm.t().numpy())  # (T, F)
+            mel_list.append(mel_norm.numpy())  # (F, T)
         batched["input_values"] = mel_list
         return batched
 
@@ -124,6 +124,74 @@ def to_melspectrogram(
     )
 
     logger.info("Mel-spectrogram computation complete.")
+    return processed
+
+
+def to_mfcc(
+    dataset: Dataset | DatasetDict,
+    n_mfcc: int = 13,
+    n_mels: int = 32,
+    sr: int = 16000,
+    n_fft: int = 400,
+    hop_length: int = 160,
+    batch_size: int = 64,
+    device: str = None,  # 'cuda' или None (cpu)
+) -> Dataset | DatasetDict:
+    """Compute batched MFCC with DB-scaling and normalization (mean/std per spec).
+
+    Uses PyTorch transforms for CPU/GPU. Outputs (T, n_mfcc) shape, consistent with mel.
+    Removes 'audio' column. Assumes dataset.cast_column("audio", Audio(sampling_rate=sr)).
+
+    Args:
+        dataset: Dataset with 'audio' column (dict: array, sampling_rate).
+        n_mfcc: Number of MFCC coefficients.
+        n_mels: Mel bins for internal MelSpectrogram.
+        sr: Target sampling rate.
+        n_fft, hop_length: STFT params.
+        batch_size: Batch size.
+        device: 'cuda' if available for speedup.
+
+    Returns:
+        Dataset with 'input_values' (time_steps, n_mfcc).
+    """
+    device = device or ('cuda' if torch.cuda.is_available() else 'cpu')
+    logger.info("PyTorch batched MFCC (n_mfcc=%d, n_mels=%d, device=%s, batch=%d)", 
+                n_mfcc, n_mels, device, batch_size)
+
+    mfcc_transform = T.MFCC(
+        sample_rate=sr,
+        n_mfcc=n_mfcc,
+        melkwargs={
+            "n_fft": n_fft,
+            "win_length": n_fft,
+            "hop_length": hop_length,
+            "f_min": 0.0,
+            "f_max": sr / 2,
+            "n_mels": n_mels,
+            "center": False,
+            "normalized": False,
+            "mel_scale": "slaney"
+        },
+    ).to(device)
+
+    def _process_batched(batched):
+        mfcc_list = []
+        for a in batched["audio"]:
+            waveform = torch.from_numpy(np.array(a["array"], dtype=np.float32)).unsqueeze(0).to(device)  # (1, L)
+            mfcc = mfcc_transform(waveform).squeeze(0)  # (n_mfcc, T)
+            mfcc_list.append(mfcc.cpu().numpy())  # (n_mfcc, T)
+        batched["input_values"] = mfcc_list
+        return batched
+
+    processed = dataset.map(
+        _process_batched,
+        batched=True,
+        batch_size=batch_size,
+        desc="PyTorch MFCC",
+        remove_columns=["audio"],
+    )
+
+    logger.info("MFCC computation complete.")
     return processed
 
 
@@ -156,7 +224,10 @@ def tokenize_labels(
         if tokenizer.pad_token_id is not None:
             pad_id = np.int64(tokenizer.pad_token_id)
             label_ids[label_ids == pad_id] = np.int64(-100)
-        example["input_ids"] = label_ids.tolist()
+        label_ids = label_ids.tolist()
+        if len(label_ids) > 512:
+            logger.info(f"Number of tokens more than 512: {len(label_ids)}")
+        example["input_ids"] = label_ids
         return example
 
     tokenized_data = dataset.map(
@@ -168,40 +239,19 @@ def tokenize_labels(
     logger.info("Tokenization complete")
     return tokenized_data
 
-
+# TODO: Изменить размерность на (B, max_time, n_features) и 
+# сделать требование одинакового формата
 @dataclass
 class DataCollatorASRWithPadding:
-    """Data collator for ASR with mel-spectrograms and dynamic padding.
-
-    Pads input_values to (batch, time, n_mels) and labels to (batch, seq_len).
-    Supports fixed n_mels, attention_mask, length tracking, and
-    padding to multiple. Handles transposition detection for input shapes.
-    """
     fixed_n_mels: Optional[int] = 32
     max_input_length: Optional[int] = None
     max_labels_length: Optional[int] = None
     padding_value: float = 0.0
     labels_pad_token_id: int = -100
-    pad_to_multiple_of: Optional[int] = None
-    pad_to_multiple_of_labels: Optional[int] = None
+    pad_to_multiple_of: Optional[int] = 8           # для conv / tensor cores
+    pad_to_multiple_of_labels: Optional[int] = 8
 
-    def __call__(
-        self,
-        batch: List[Dict[str, Union[List, np.ndarray, torch.Tensor]]]
-    ) -> Dict[str, torch.Tensor]:
-        """Pad batch dynamically.
-
-        Args:
-        batch: List of dicts with 'input_values' (2D mel np.array) 
-          and 'input_ids'.
-
-        Returns:
-        Dict with padded tensors: input_values, input_ids (labels),
-          attention_mask, input_lengths, targets_lengths.
-
-        Raises:
-        RuntimeError: If batch empty or missing keys/shapes invalid.
-        """
+    def __call__(self, batch: List[Dict]):
         if not batch:
             raise RuntimeError("Batch is empty!")
 
@@ -210,111 +260,58 @@ class DataCollatorASRWithPadding:
         input_lengths = []
         targets_lengths = []
 
-        # Extract and validate
         for example in batch:
-            if "input_values" not in example:
-                raise RuntimeError(f"Example missing 'input_values'. Keys: \
-                                   {list(example.keys())}")
-            if "input_ids" not in example:
-                raise RuntimeError(f"Example missing 'input_ids'. Keys: \
-                                   {list(example.keys())}")
-
             mel_spec = np.array(example["input_values"], dtype="float32")
             label_ids = np.array(example["input_ids"], dtype="int64")
 
-            if mel_spec.ndim != 2:
-                raise RuntimeError(f"input_values must be 2D, \
-                                   got {mel_spec.ndim}D {mel_spec.shape}")
+            if mel_spec.ndim != 2 or mel_spec.shape[0] != self.fixed_n_mels:
+                raise ValueError(f"Неверный mel: {mel_spec.shape}")
 
-            # Auto-transpose if needed: ensure (n_mels, time).
-            n_mels_ex, time_ex = mel_spec.shape
-            if time_ex < n_mels_ex:
-                mel_spec = mel_spec.T
-                n_mels_ex, time_ex = time_ex, n_mels_ex
-
-            if self.fixed_n_mels and n_mels_ex != self.fixed_n_mels:
-                raise RuntimeError(f"Expected n_mels={self.fixed_n_mels}, \
-                                   got {n_mels_ex}")
-
-            input_lengths.append(time_ex)
-            targets_lengths.append(len(label_ids))
+            time_ex = mel_spec.shape[1]
             input_values_list.append(mel_spec)
+            input_lengths.append(time_ex)
             labels_list.append(label_ids)
+            targets_lengths.append(len(label_ids))
 
-        batch_size = len(batch)
-        n_mels = self.fixed_n_mels or max(spec.shape[0]
-                                          for spec in input_values_list)
+        # Вычисляем максимумы (без жёсткой обрезки — датасет уже отфильтровал)
+        max_time_steps = max(input_lengths)
+        if self.pad_to_multiple_of:
+            max_time_steps = ((max_time_steps + self.pad_to_multiple_of - 1) 
+                            // self.pad_to_multiple_of * self.pad_to_multiple_of)
 
-        # Compute max lengths with padding multiples.
-        max_time_in_batch = max(spec.shape[1] for spec in input_values_list)
-        max_time_steps = self._pad_to_multiple(
-            min(max_time_in_batch, self.max_input_length or float("inf")))
-        max_label_len = self._pad_to_multiple(
-            min(max(len(lab) for lab in labels_list),
-                self.max_labels_length or float("inf")))
+        max_label_len = max(targets_lengths)
+        if self.pad_to_multiple_of_labels:
+            max_label_len = ((max_label_len + self.pad_to_multiple_of_labels - 1) 
+                           // self.pad_to_multiple_of_labels * self.pad_to_multiple_of_labels)
 
-        # Pad input_values: (batch, n_mels, max_time) → transpose to (B, T, C)
+        # Паддинг аудио
         padded_input_values = torch.full(
-            (batch_size, n_mels, max_time_steps),
-            self.padding_value,
-            dtype=torch.float32,
+            (len(batch), max_time_steps, self.fixed_n_mels),
+            self.padding_value, dtype=torch.float32
         )
-        attention_mask = torch.zeros(
-            (batch_size, max_time_steps),
-            dtype=torch.long)
+        attention_mask = torch.zeros((len(batch), max_time_steps), dtype=torch.long)
 
-        for i, mel_spec in enumerate(input_values_list):
-            mel_spec = mel_spec.astype("float32")
-            n_mels_ex, time_ex = mel_spec.shape
+        for i, mel in enumerate(input_values_list):
+            t = min(len(mel[0]), max_time_steps)  # на всякий случай
+            padded_input_values[i, :t] = torch.from_numpy(mel[:, :t].T)  # (time, n_mels)
+            attention_mask[i, :t] = 1
 
-            # Truncate
-            if time_ex > max_time_steps:
-                mel_spec = mel_spec[:, :max_time_steps]
-                time_ex = max_time_steps
-
-            # Pad time dim
-            if time_ex < max_time_steps:
-                pad_time = max_time_steps - time_ex
-                mel_spec = np.pad(
-                    mel_spec,
-                    ((0, 0), (0, pad_time)),
-                    mode="constant",
-                    constant_values=self.padding_value)
-
-            # Pad n_mels (rare)
-            if n_mels_ex < n_mels:
-                pad_mels = n_mels - n_mels_ex
-                mel_spec = np.pad(
-                    mel_spec,
-                    ((0, pad_mels), (0, 0)),
-                    mode="constant",
-                    constant_values=self.padding_value)
-
-            padded_input_values[i] = torch.from_numpy(mel_spec)
-            attention_mask[i, :time_ex] = 1
-
-        padded_input_values = padded_input_values.transpose(1, 2) # (B, T, C)
-
-        # Pad labels with -100 masking.
+        # Паддинг меток
         padded_labels = torch.full(
-            (batch_size, max_label_len),
-            self.labels_pad_token_id,
-            dtype=torch.long)
-        label_mask = torch.zeros((batch_size, max_label_len), dtype=torch.long)
+            (len(batch), max_label_len),
+            self.labels_pad_token_id, dtype=torch.long
+        )
+        label_mask = torch.zeros((len(batch), max_label_len), dtype=torch.long)
 
-        for i, labels in enumerate(labels_list):
-            labels = labels.astype("long")
-            trunc_len = min(len(labels), max_label_len)
-            padded_labels[i, :trunc_len] = torch.from_numpy(labels[:trunc_len])
-            label_mask[i, :trunc_len] = 1
+        for i, lbl in enumerate(labels_list):
+            seq_len = len(lbl)
+            padded_labels[i, :seq_len] = torch.from_numpy(lbl.astype("long"))
+            label_mask[i, :seq_len] = 1
 
-        # Apply masking to labels (like CTCWithPadding)
-        padded_labels = padded_labels.masked_fill(
-            label_mask.eq(0),
-            self.labels_pad_token_id)
+        padded_labels = padded_labels.masked_fill(label_mask.eq(0), self.labels_pad_token_id)
 
         return {
-            "input_values": padded_input_values,
+            "input_values": padded_input_values,     # (B, T, C)
             "input_ids": padded_labels,
             "attention_mask": attention_mask,
             "input_lengths": torch.tensor(input_lengths, dtype=torch.long),
@@ -385,10 +382,8 @@ class DataCollatorCTCWithPadding:
         # Split for different padding strategies.
         input_features = [{"input_values": feature["input_values"]}
                           for feature in features]
-        print(f"input_features: {input_features}")
         label_features = [{"input_ids": feature["input_ids"]}
                           for feature in features]
-        print(f"label_features: {label_features}")
 
         # Pad audio features.
         batch = self.processor.feature_extractor.pad(

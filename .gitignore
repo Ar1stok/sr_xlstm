@@ -43,7 +43,7 @@ MANIFEST
 logs/
 
 # Unit test / coverage reports
-.cache
+.*cache
 tmp
 
 # Environments
@@ -60,8 +60,9 @@ venv.bak/
 
 # other scripts
 create.sh
-run_gpu.sh
 run_cpu.sh
+run_gpu*.sh
+run_monitor_gpu.sh
 
 # other
 *.csv
@@ -83,3 +84,6 @@ trash.py
 test*.py
 used_config.yaml
 w2v_asr.yaml
+w2v_outputs
+sova_csv.py
+main_rtf.py

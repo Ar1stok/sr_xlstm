@@ -1,10 +1,9 @@
 """xLSTM and Wav2Vec2-based ASR models with CTC heads."""
 import logging
-from typing import Optional
+from typing import Dict, Optional
 
 import torch
 import torch.nn as nn
-from transformers import Wav2Vec2Model
 from xlstm import (FeedForwardConfig, mLSTMBlockConfig, mLSTMLayerConfig,
                    sLSTMBlockConfig, sLSTMLayerConfig, xLSTMBlockStack,
                    xLSTMBlockStackConfig)
@@ -18,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 
 class ASRxLSTM(nn.Module):
-    """xLSTM ASR model: Mel-spectrograms → Conv frontend → xLSTM → CTC head.
+    """xLSTM ASR model: MFCC → Conv frontend → xLSTM → CTC head.
 
     Expects input_values: (batch, time_steps, n_mels). Applies global mel
     normalization, conv1d feature extraction, xLSTM stack, and CTC projection.
@@ -34,9 +33,9 @@ class ASRxLSTM(nn.Module):
         num_heads: int = 4,
         context_length: int = 1024,
         dropout: float = 0.1,
-        mel_mean: float = 0.0,
-        mel_std: float = 1.0,
         slstm_backend: str = 'cuda',
+        mean_global: Optional[torch.Tensor] = None,
+        std_global: Optional[torch.Tensor] = None,
         debug: bool = False,
     ) -> None:
         """Initialize xLSTM ASR model.
@@ -49,8 +48,8 @@ class ASRxLSTM(nn.Module):
             num_heads: Number of attention heads in xLSTM.
             context_length: xLSTM context length.
             dropout: Dropout probability.
-            mel_mean: Global mel mean for normalization.
-            mel_std: Global mel std for normalization.
+            mfcc_mean: Global mel mean for normalization.
+            mfcc_std: Global mel std for normalization.
             slstm_backend: Backend for sLSTM ('cuda', 'vanilla').
             debug: Enable debug logging.
         """
@@ -58,13 +57,13 @@ class ASRxLSTM(nn.Module):
         self.num_classes = num_classes
         self.num_features = num_features
         self.hidden_size = hidden_size
+        if mean_global is not None and std_global is not None:
+            self.mean_global = mean_global  # (n_mfcc, 1)
+            self.std_global = std_global    # (n_mfcc, 1)
+        else:
+            self.mean_global = None
+            self.std_global = None
         self.debug = debug
-
-        # Global mel normalization buffers.
-        self.register_buffer('mel_mean', torch.tensor(mel_mean,
-                                                      dtype=torch.float32))
-        self.register_buffer('mel_std', torch.tensor(mel_std,
-                                                     dtype=torch.float32))
 
         # Conv frontend: (B, n_mels, T) → (B, hidden, T).
         self.conv_frontend = nn.Sequential(
@@ -112,21 +111,16 @@ class ASRxLSTM(nn.Module):
             context_length=context_length,
             num_blocks=num_blocks,
             embedding_dim=hidden_size,
-            slstm_at=[1], # sLSTM at block 1.
+            add_post_blocks_norm=True,
+            slstm_at=[1, 3, 5, 7],
         )
         self.xlstm_stack = xLSTMBlockStack(xlstm_cfg)
 
         # CTC linear head.
-        self.ctc_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.LayerNorm(hidden_size // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size // 2, num_classes),
-        )
+        self.ctc_head = nn.Linear(hidden_size, num_classes)
 
-    def normalize_mel(self, x: torch.Tensor) -> torch.Tensor:
-        """Normalize mel-spectrograms using global statistics.
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        """Normalize MFCC using global statistics.
 
         Args:
             x: Input tensor (batch_size, time_steps, num_features).
@@ -134,7 +128,16 @@ class ASRxLSTM(nn.Module):
         Returns:
             Normalized tensor.
         """
-        return (x - self.mel_mean) / (self.mel_std + 1e-5)
+        if self.mean_global is not None and self.std_global is not None:
+            mean = self.mean_global.to(device=x.device, dtype=x.dtype)  # (n_mfcc, 1)
+            std = self.std_global.to(device=x.device, dtype=x.dtype)    # (n_mfcc, 1)
+            x_norm = (x - mean) / (std + 1e-6)
+        else:
+            mean = x.mean(dim=-1, keepdim=True)
+            std = x.std(dim=-1, keepdim=True)
+            x_norm = (x - mean) / (std + 1e-6)
+
+        return x_norm
 
     def forward(
         self,
@@ -164,8 +167,8 @@ class ASRxLSTM(nn.Module):
                 input_values.max().item(),
             )
 
-       # 1. Global mel normalization.
-        x = self.normalize_mel(input_values)
+       # 1. Global normalization.
+        x = self.normalize(input_values)
         if self.debug:
             logger.info('[DEBUG] After norm: mean=%.3f, std=%.3f',
                         x.mean().item(), x.std().item())
@@ -185,8 +188,8 @@ class ASRxLSTM(nn.Module):
         x = self.feature_dropout(x)
 
         if self.debug:
-            logger.info('[DEBUG] After LN+dropout: \
-                        shape=%s, mean=%.3f, std=%.3f',
+            logger.info('[DEBUG] After LN+dropout:\
+                        shape=%s, mean=%.3f, std=%.13f',
                         x.shape, x.mean().item(), x.std().item())
 
         # 4. xLSTM stack.
@@ -195,6 +198,7 @@ class ASRxLSTM(nn.Module):
             logger.info('[DEBUG] xLSTM out: shape=%s, mean=%.3f, std=%.3f',
                         xlstm_out.shape, xlstm_out.mean().item(),
                         xlstm_out.std().item())
+        
         # 5. CTC head.
         logits = self.ctc_head(xlstm_out)
         if self.debug:
@@ -215,63 +219,4 @@ class ASRxLSTM(nn.Module):
         # Return logits dict for Trainer compatibility.
         if labels is not None:
             return {'logits': logits}
-        return logits
-
-
-class Wav2Vec2CTC(nn.Module):
-    """Wav2Vec2 backbone with CTC head.
-
-    Supports raw waveforms as input. Optional backbone freezing.
-    """
-    def __init__(
-        self,
-        model_path: str = 'wav2vec2-russian-model',
-        num_classes: int = 40,
-        dropout: float = 0.1,
-        freeze_backbone: bool = False,
-    ) -> None:
-        """Initialize Wav2Vec2 CTC model.
-
-        Args:
-            model_path: Path to pretrained Wav2Vec2 model.
-            num_classes: CTC vocabulary size.
-            dropout: Dropout in CTC head.
-            freeze_backbone: Freeze Wav2Vec2 parameters.
-        """
-        super().__init__()
-        self.wav2vec = Wav2Vec2Model.from_pretrained(model_path,
-                                                     local_files_only=True)
-
-        if freeze_backbone:
-            for param in self.wav2vec.parameters():
-                param.requires_grad = False
-
-        hidden_size = self.wav2vec.config.hidden_size
-
-        self.ctc_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),
-            nn.LayerNorm(hidden_size // 2),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size // 2, num_classes)
-        )
-
-    def forward(
-        self,
-        input_values: torch.Tensor,
-        attention_mask: torch.Tensor = None,
-        **kwargs,
-    ):
-        """Forward pass.
-
-        Args:
-            input_values: Raw waveforms (batch_size, time_samples).
-            attention_mask: Optional (batch_size, time_samples).
-            **kwargs: Ignored.
-
-        Returns:
-            CTC logits (batch_size, time_samples, num_classes).
-        """
-        outputs = self.wav2vec(input_values, attention_mask=attention_mask)
-        logits = self.ctc_head(outputs.last_hidden_state)
         return logits

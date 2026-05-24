@@ -4,48 +4,55 @@
 training_args:
   _target_: transformers.TrainingArguments
 
-  # Куда сохранять чекпоинты/логи
-  output_dir: ${output_dir}
-  overwrite_output_dir: true
+  output_dir: "${hydra:runtime.output_dir}/run_info"
+  overwrite_output_dir: false
 
-  # Организация батчей
-  group_by_length: true
-  per_device_train_batch_size: 8
-  per_device_eval_batch_size: 2
-  gradient_accumulation_steps: 2
+  # Для Iterable Dataset
+  num_train_epochs: 1
+  max_steps: 50000
 
-  # Оптимизация
-  learning_rate: 1e-4
-  weight_decay: 1e-3
-  warmup_ratio: 0.1
-  num_train_epochs: 10
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 16
+  eval_accumulation_steps: 4
 
-  # Стратегии eval/save/logging
   eval_strategy: "steps"
   save_strategy: "steps"
-  eval_steps: 100
-  save_steps: 1000
-  logging_steps: 5
+  logging_strategy: "steps"
 
-  # Модель для сохранения
+  eval_steps: 1000
+  save_steps: 4000
+  logging_steps: 100
+
+  save_total_limit: 5
+
   load_best_model_at_end: false
   metric_for_best_model: "eval_wer"
   greater_is_better: false
 
-  # Логирование для TensorBoard
-  # report_to: "tensorboard"
-  # logging_dir: ${output_dir}/logs
+  learning_rate: 0.0005 # max_lr for CyclicLR
+  weight_decay: 0.001
+  warmup_ratio: 0.08
 
-  # Precision и поведение колоночного фильтра
   fp16: true
+  max_grad_norm: 1.0
+  group_by_length: false
   remove_unused_columns: false
+  report_to: "tensorboard"
+  logging_dir: "${hydra:runtime.output_dir}/tensorboard"
+  ddp_find_unused_parameters: false
 
-# DataCollator для ASRxLSTM
+  # Оптимизация DataLoader
+  dataloader_num_workers: 8
+  dataloader_pin_memory: true
+  dataloader_persistent_workers: true
+  skip_memory_metrics: true
+
+  ignore_data_skip: true
+
+# DataCollator для ASRxLSTM (без изменений)
 data_collator:
   _target_: data.data_process.DataCollatorASRWithPadding
-
   fixed_n_mels: ${models.num_features}
-  max_input_length: 512
-  max_labels_length: 256
   padding_value: 0.0
   labels_pad_token_id: -100

@@ -4,11 +4,20 @@ defaults:
   - trainer: hf_trainer
   - _self_
 
-# Settings
 experiment_name: "xlstm_rudevice"
-output_dir: "./outputs"
 seed: 42
 alpha: 0.0
+
+hydra:
+  run:
+    dir: outputs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: multirun/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    subdir: ${hydra.job.num}
+
+output_dir: ${hydra:run.dir}
+
+checkpoint_dir: None
 
 # Logging & Debug
 log_level: "INFO"

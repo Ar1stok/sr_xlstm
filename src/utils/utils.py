@@ -2,8 +2,16 @@
 import logging
 
 import numpy as np
+import os
+import random
+import zipfile
+from typing import List, Tuple, Dict, Any
 import torch
+import torchaudio
+import torchaudio.transforms
+import io
 from tqdm import tqdm
+
 
 # Configure logging
 logging.basicConfig(
@@ -141,3 +149,71 @@ def debug_model_forward(
 
     model.debug = False
     return logits
+
+
+def compute_mfcc_stats(
+    zip_path: str,
+    zip_list: List[str],
+    n_samples_per_zip: int = 1000,
+    sample_rate: int = 16000,
+    mfcc_params: Dict[str, Any] = None,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Compute global MFCC mean and std across n_samples_per_zip random samples from each zip.
+    """
+    mfcc_params = mfcc_params or {}
+    mfcc_params.setdefault("sample_rate", sample_rate)
+    mfcc_params.setdefault("n_mfcc", 13)
+    if "melkwargs" not in mfcc_params:
+        mfcc_params["melkwargs"] = {
+            "n_fft": 400,
+            "win_length": 400,
+            "hop_length": 160,
+            "f_min": 0.0,
+            "f_max": 8000.0,
+            "n_mels": 32,
+            "center": False,
+            "normalized": False,
+            "mel_scale": "slaney",
+        }
+    transform = torchaudio.transforms.MFCC(**mfcc_params)
+
+    all_mfccs = []
+
+    for zip_name in zip_list:
+        zip_path_full = os.path.join(zip_path, zip_name)
+        if not os.path.isfile(zip_path_full):
+            print(f"Skipping missing zip: {zip_path_full}")
+            continue
+
+        with zipfile.ZipFile(zip_path_full, "r") as zf:
+            wav_files = [f for f in zf.namelist() if f.endswith(".wav")]
+            selected = random.sample(wav_files, min(n_samples_per_zip, len(wav_files)))
+
+            for wav_path in selected:
+                try:
+                    with zf.open(wav_path) as wav_file:
+                        logger.info(f"Processing {wav_path}")
+                        wav_bytes = wav_file.read()
+                        wav_io = io.BytesIO(wav_bytes)
+                        waveform, sr = torchaudio.load_with_torchcodec(wav_io, normalize=True)
+
+                        std = waveform.std().item()
+                        if std < 1e-8:
+                            continue
+
+                        mfcc = transform(waveform).squeeze(0)  # (n_mfcc, time)
+                        all_mfccs.append(mfcc.flatten())
+
+                except Exception as e:
+                    print(f"Error processing {wav_path}: {e}")
+
+    if not all_mfccs:
+        raise ValueError("No valid samples found for MFCC stat computation.")
+
+    # (K, ) по всем фреймам и коэффициентам
+    stacked = torch.cat(all_mfccs, dim=0)
+    mean = stacked.mean().unsqueeze(0)  # (1,)
+    std = stacked.std().unsqueeze(0) + 1e-6  # (1,)
+
+    return mean, std

@@ -3,13 +3,13 @@
 _target_: model.model.ASRxLSTM
 
 # Акустические фичи
-num_features: 32
+num_features: 13
 
 # Архитектура xLSTM
-hidden_size: 256
-num_blocks: 4
-num_heads: 4
-context_length: 1024
+hidden_size: 512
+num_blocks: 8
+num_heads: 8
+context_length: 2048
 slstm_backend: 'cuda'
 
 # Регуляризация
@@ -19,8 +19,8 @@ dropout: 0.1
 num_classes: ${datasets.vocab_size}
 
 # Нормализация mel (обновляется в коде)
-mel_mean: ${datasets.mel_mean}
-mel_std: ${datasets.mel_std}
+mean_global: ${datasets.mel_mean}
+std_global: ${datasets.mel_std}
 
 # Дебаг‑режим
 debug: ${debug}
