@@ -175,7 +175,8 @@ def split_data(dataset: Dataset, split_config: Dict[str, Any]) -> DatasetDict:
 
 def save_to_parquet(
     dataset: Optional[DatasetDict | Dataset],
-    save_path: str
+    save_path: str,
+    save_name: str = "dataset"
 ) -> None:
     """Save Dataset or DatasetDict to parquet files.
 
@@ -200,7 +201,7 @@ def save_to_parquet(
             )
             logger.info('%s part of dataset was saved to %s', split, save_path)
     else:
-        dataset.to_parquet(path_or_buf=f'{save_path}/dataset.parquet')
+        dataset.to_parquet(path_or_buf=f'{save_path}/{save_name}.parquet')
         logger.info('Dataset was saved to: %s', save_path)
 
 

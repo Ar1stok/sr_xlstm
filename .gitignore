@@ -67,6 +67,7 @@ run_monitor_gpu.sh
 # other
 *.csv
 *.parquet
+golos
 source_data
 clean_data
 RuDevices.tar
@@ -87,3 +88,4 @@ w2v_asr.yaml
 w2v_outputs
 sova_csv.py
 main_rtf.py
+data_manager_golos.py

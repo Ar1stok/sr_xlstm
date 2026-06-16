@@ -1,17 +1,16 @@
 """Utility functions for ASR data processing and model debugging."""
+import io
 import logging
-
-import numpy as np
 import os
 import random
 import zipfile
-from typing import List, Tuple, Dict, Any
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
 import torch
 import torchaudio
 import torchaudio.transforms
-import io
 from tqdm import tqdm
-
 
 # Configure logging
 logging.basicConfig(
@@ -216,4 +215,30 @@ def compute_mfcc_stats(
     mean = stacked.mean().unsqueeze(0)  # (1,)
     std = stacked.std().unsqueeze(0) + 1e-6  # (1,)
 
+    return mean, std
+
+import torch
+from typing import Tuple
+
+def mfcc_stats(dataset, max_items: int | None = None) -> Tuple[torch.Tensor, torch.Tensor]:
+    all_mfccs = []
+    
+    # Если задан лимит, перемешиваем датасет и берем первые max_items элементов
+    if max_items is not None and max_items < len(dataset):
+        working_dataset = dataset.shuffle(seed=42).select(range(max_items))
+    else:
+        working_dataset = dataset
+    
+    # Итерируемся по оптимизированной выборке
+    for item in working_dataset:
+        mfcc = torch.tensor(item['input_values'], dtype=torch.float32)
+        all_mfccs.append(mfcc.flatten())
+    
+    # Объединяем все элементы в один большой вектор
+    stacked = torch.cat(all_mfccs, dim=0)
+    
+    # Вычисляем глобальные метрики формы (1,)
+    mean = stacked.mean().unsqueeze(0)
+    std = stacked.std().unsqueeze(0) + 1e-6
+    
     return mean, std

@@ -1,0 +1,18 @@
+# conf/datasets/golos.yaml
+
+# Paths
+train_dataset_path: ${oc.env:DATASET_PATH_FILTER, ./golos/train}
+valid_dataset_path: ${oc.env:DATASET_PATH_FILTER, ./golos/valid}
+tokenizer_path: ${oc.env:TOKENIZER_PATH, ./src/utils/tokenizer}
+
+# Count of examples
+train_n_examples: None
+eval_n_examples: 20000
+
+# Using like torch.tensor([#value])
+MFCC_GLOBAL_MEAN: -7.9822  # -4.6671
+MFCC_GLOBAL_STD: 52.7301   # 43.0861
+
+# For model
+vocab_size: 0 # fill after load tokenizer
+blank_token: "<blank>"

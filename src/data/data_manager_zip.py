@@ -1,5 +1,6 @@
 import glob
 import io
+import logging
 import os
 import zipfile
 from pathlib import Path
@@ -7,9 +8,8 @@ from typing import Dict, Iterator, List
 
 import numpy as np
 import soundfile as sf
-from datasets import DatasetDict, Dataset, Features, Audio, Value, load_dataset
+from datasets import Audio, Dataset, DatasetDict, Features, Value, load_dataset
 from torchcodec.decoders import AudioDecoder
-import logging
 
 logger = logging.getLogger(__name__)
 
@@ -165,12 +165,7 @@ def zip_to_parquet_chunks(
         logger.info("Finished %s", zip_path)
 
 
-def load_from_parquet_parts(path: str, split_name: str = "train"):
-    splits = [
-        'part_37_chunk0',
-        'part_37_chunk1',
-        'part_37_chunk2',
-    ]
+def load_from_parquet_parts(path: str, splits: list[str], split_name: str = "train"):
     data_files = {split: os.path.join(path, f'{split}.parquet')
                   for split in splits}
     # Загружаем всё в один split

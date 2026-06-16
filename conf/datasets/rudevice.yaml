@@ -5,12 +5,11 @@ dataset_path: ${oc.env:DATASET_PATH_FILTER, ./ruyoutube_data/eval_part_mfcc}
 tokenizer_path: ${oc.env:TOKENIZER_PATH, ./src/utils/tokenizer}
 
 # Count of examples
-# train_n_examples: 5000
 eval_n_examples: 10000
 
 # Using like torch.tensor([#value])
-MFCC_GLOBAL_MEAN:  -4.6671
-MFCC_GLOBAL_STD:  43.0861
+MFCC_GLOBAL_MEAN: -4.6671
+MFCC_GLOBAL_STD: 43.0861
 
 # For model
 vocab_size: 0 # fill after load tokenizer

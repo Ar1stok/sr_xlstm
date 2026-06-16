@@ -25,6 +25,7 @@ class TrainerxLSTM(Trainer):
     def __init__(
             self,
             *args,
+            lr_args,
             blank_id,
             alpha: float = 0.0,
             debug: bool = False,
@@ -40,6 +41,7 @@ class TrainerxLSTM(Trainer):
             **kwargs: Keyword arguments for parent Trainer.
         """
         super().__init__(*args, **kwargs)
+        self.lr_args = lr_args
         self.debug = debug
         self.alpha = alpha
         self.blank_id = blank_id
@@ -196,13 +198,24 @@ class TrainerxLSTM(Trainer):
                 eps=self.args.adam_epsilon,
             )
 
-        # Setup CyclicLR
-        self.lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
-            self.optimizer,
-            base_lr=1e-5,
-            max_lr=self.args.learning_rate,
-            step_size_up=3500,
-            step_size_down=3500,
-            mode='triangular2',
-            cycle_momentum=False,
-        )
+        # Setup CyclicLR if it True in cfg
+        if self.lr_scheduler is None:
+            if self.lr_args.cyclic:
+                self.lr_scheduler = torch.optim.lr_scheduler.CyclicLR(
+                    self.optimizer,
+                    base_lr=self.lr_args.base_lr,
+                    max_lr=self.args.learning_rate,
+                    step_size_up=self.lr_args.step_size_up,
+                    step_size_down=self.lr_args.step_size_down,
+                    mode=self.lr_args.mode,
+                    cycle_momentum=False,
+                )
+            else:
+                from transformers.optimization import get_scheduler
+                
+                self.lr_scheduler = get_scheduler(
+                    name=self.args.lr_scheduler_type,
+                    optimizer=self.optimizer,
+                    num_warmup_steps=self.args.get_warmup_steps(num_training_steps),
+                    num_training_steps=num_training_steps,
+                )

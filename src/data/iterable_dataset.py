@@ -1,13 +1,14 @@
 import io
 import logging
 import os
-from typing import List, Optional, Dict, Any
 import zipfile
+from typing import Any, Dict, List, Optional
+
 import numpy as np
 import torch
+import torchaudio
 from torch.utils.data import IterableDataset
 from torchcodec.decoders import AudioDecoder
-import torchaudio
 from transformers import AutoTokenizer
 
 logger = logging.getLogger(__name__)

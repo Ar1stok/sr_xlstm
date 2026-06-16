@@ -1,10 +1,10 @@
 defaults:
-  - datasets: rudevice
+  - datasets: golos
   - models: xlstm_asr
   - trainer: hf_trainer
   - _self_
 
-experiment_name: "xlstm_rudevice"
+experiment_name: "xlstm_golos"
 seed: 42
 alpha: 0.0
 
@@ -17,7 +17,7 @@ hydra:
 
 output_dir: ${hydra:run.dir}
 
-checkpoint_dir: None
+checkpoint_dir: "./multirun/2026-06-14/16-51-36/0/run_info/checkpoint-25000"
 
 # Logging & Debug
 log_level: "INFO"

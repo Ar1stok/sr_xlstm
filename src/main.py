@@ -2,9 +2,10 @@
 import logging
 
 import hydra
-from omegaconf import DictConfig, OmegaConf
 import torch
+from omegaconf import DictConfig, OmegaConf
 from transformers import AutoTokenizer
+from safetensors.torch import load_file
 
 from data.data_manager import load_from_parquet
 from data.iterable_dataset import ZipAudioDataset
@@ -54,21 +55,10 @@ def main(cfg: DictConfig):
     logger.info(f"Tokenizer init")
 
     # Load Datasets
-    train_dataset = ZipAudioDataset(
-        zip_path=ZIP_FOLDER,
-        zip_list=ZIP_LIST,
-        chunk_size=10000,
-        tokenizer_path=cfg.datasets.tokenizer_path,
-        debug=cfg.debug,
-        max_audio_seconds=20,
-        max_tokens=None,
-    )
+    train_dataset = load_from_parquet(path=cfg.datasets.train_dataset_path)
     logger.info(f"train_dataset init")
 
-    dataset = load_from_parquet(path=cfg.datasets.dataset_path)
-    eval_dataset = dataset.select(
-        range(cfg.datasets.eval_n_examples)
-    )
+    eval_dataset = load_from_parquet(path=cfg.datasets.valid_dataset_path)
     logger.info(f"eval_dataset init")
 
     # Initialize mean & std.
@@ -84,6 +74,10 @@ def main(cfg: DictConfig):
         std_global=mfcc_std,
     )
 
+    # Load State Model
+    state = load_file(f"{checkpoint}/model.safetensors")
+    model.load_state_dict(state, strict=True)
+
     training_args = hydra.utils.instantiate(cfg.trainer.training_args)
     data_collator = hydra.utils.instantiate(cfg.trainer.data_collator)
 
@@ -91,8 +85,10 @@ def main(cfg: DictConfig):
     compute_metrics = call_compute_wer(tokenizer, blank_id=blank_id)
 
     # Initialize trainer.
+    lr_args = cfg.trainer.lr_scheduler
     trainer = TrainerxLSTM(
         model=model,
+        lr_args=lr_args,
         blank_id=blank_id,
         debug=cfg.debug,
         alpha=cfg.alpha,
